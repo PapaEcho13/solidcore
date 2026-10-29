@@ -1,0 +1,18 @@
+{
+  "cases": [
+    {
+      "name": "issue_1518_tiny_arc_periodic_offset",
+      "upstream_ref": "source/SMLib/src/SmExtent1d.cpp:1229; solidcore#1518 (legacy snapping is intentional parity)",
+      "inputs": {
+        "op": "periodic_value",
+        "e": [
+          -30,
+          -29.99993
+        ],
+        "v": 330.000035,
+        "period": 360,
+        "tol": -1
+      }
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "cases": [
+    {
+      "name": "issue_1518_tiny_arc_periodic_offset",
+      "upstream_ref": "source/SMLib/src/SmExtent1d.cpp:1229; solidcore#1518 (legacy snapping is intentional parity)",
+      "inputs": {
+        "ellipse": {
+          "c": [
+            0,
+            0,
+            0
+          ],
+          "x": [
+            1,
+            0,
+            0
+          ],
+          "y": [
+            0,
+            1,
+            0
+          ],
+          "domain": [
+            -30,
+            0
+          ],
+          "radii": [
+            70.9232,
+            16
+          ]
+        },
+        "ops": [
+          {
+            "op": "set_step_interval",
+            "domain": [
+              -30,
+              -29.99993
+            ]
+          },
+          {
+            "op": "step_inv",
+            "p": [
+              61.42131457993176,
+              -7.999991535601474,
+              0
+            ],
+            "classify": true
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -42,6 +42,8 @@
 //! | [`MAX_PERIOD_SHIFTS`]                             | no counterpart (loop bound)                      |
 //!
 //! Deviations:
+//! - STEP inversion uses the kernel-aware periodic containment correction when
+//!   `periodic_containment_preserve_offset` is enabled (WR-504, #1518).
 //! - **Derived class.** `SmEllipse` derives from `SmBSplineCurve`; the base object is
 //!   the [`Ellipse::base`] field; the ellipse (and `SmCircle`, unit `curve.ellipse_p1`)
 //!   joins [`crate::curve::curve::Curve`] as [`curve_base::CurveKind::Ellipse`]. The
@@ -1300,7 +1302,7 @@ impl Ellipse {
         // watch out for periodicity - map output to proper period
         let c = self
             .anal_domain
-            .contains_periodic_value(angular_param, 360.0, -1.0);
+            .contains_periodic_value_with_kernel(k, angular_param, 360.0, -1.0);
         let in_arc = c.contained;
         angular_param = c.periodic_value;
 
@@ -2277,6 +2279,38 @@ mod tests {
             &opts,
         )
         .expect("circle")
+    }
+
+    #[test]
+    fn tiny_ellipse_periodic_inversion_preserves_offset() {
+        let mut k = kernel();
+        k.fixes.periodic_containment_preserve_offset = true;
+        // The STEP domain is below zero while atan2 reports the same points
+        // one turn above the domain: subtract a turn, do not snap to min.
+        let lo = -30.0;
+        let hi = lo + 7.0e-5;
+        let e = Ellipse::new(
+            &k,
+            Vec3::ZERO,
+            Vec3::X,
+            Vec3::Y,
+            Extent1d::from_min_max(lo, hi),
+            70.9232,
+            16.0,
+            &EllipseOptions::default(),
+        )
+        .expect("ellipse");
+        for fraction in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let angle = lo + fraction * (hi - lo);
+            let p = e.evaluate_step_point(angle).expect("point");
+            let (inverted, _) = e.step_inversion(&k, p, false, 0.0);
+            let q = e.evaluate_step_point(inverted).expect("inverted point");
+            assert!(
+                p.distance(q) < 1e-9,
+                "{angle}: {inverted}, gap {}",
+                p.distance(q)
+            );
+        }
     }
 
     #[test]

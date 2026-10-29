@@ -60,6 +60,8 @@
 //! | `are_same`, `are_same_to_tol` (private)      | `SM_ARE_SAME`, `SM_ARE_SAME_TO_TOL`          |
 //!
 //! Deviations:
+//! - Kernel-aware periodic containment can preserve the offset instead of snapping
+//!   to the interval start with `periodic_containment_preserve_offset` (WR-504, #1518).
 //! - Out-params become return values: [`Inversion`], [`PeriodicContainment`], tuples,
 //!   `Option` for `ApproximateUnbounded`'s expanded extent (`None` where upstream's
 //!   `SetMinMax` rejects it and leaves the caller's extent untouched).
@@ -813,6 +815,36 @@ impl Extent1d {
     /// periodic value and its distances to the ends (`ContainsPeriodicValue`).
     #[must_use]
     pub fn contains_periodic_value(&self, v: f64, period: f64, tol: f64) -> PeriodicContainment {
+        self.contains_periodic_value_impl(v, period, tol, false)
+    }
+
+    /// Kernel-aware [`Self::contains_periodic_value`]. With
+    /// [`crate::kernel::UpstreamFixes::periodic_containment_preserve_offset`], a value
+    /// near the top of the period is lowered by one period, retaining its offset
+    /// when that value lies within the interval's tolerance (WR-504, #1518).
+    #[must_use]
+    pub fn contains_periodic_value_with_kernel(
+        &self,
+        k: &crate::kernel::Kernel,
+        v: f64,
+        period: f64,
+        tol: f64,
+    ) -> PeriodicContainment {
+        self.contains_periodic_value_impl(
+            v,
+            period,
+            tol,
+            k.fixes.periodic_containment_preserve_offset,
+        )
+    }
+
+    fn contains_periodic_value_impl(
+        &self,
+        v: f64,
+        period: f64,
+        tol: f64,
+        preserve_offset: bool,
+    ) -> PeriodicContainment {
         let zero = if tol > 0.0 { tol } else { EFF_ZERO_DEG };
         let mut contained = self.contains_value(v, zero);
         if contained || period == 0.0 {
@@ -832,12 +864,17 @@ impl Extent1d {
 
         contained = map > self.min - zero && map < self.max + zero;
 
-        if !contained
-            && are_same_to_tol(map, ivl.max(), zero)
-            && are_same_to_tol(map - period, self.min, zero)
-        {
-            map = self.min;
-            contained = true;
+        if !contained && are_same_to_tol(map, ivl.max(), zero) {
+            let down = map - period;
+            if preserve_offset {
+                if down > self.min - zero && down < self.max + zero {
+                    map = down;
+                    contained = true;
+                }
+            } else if are_same_to_tol(down, self.min, zero) {
+                map = self.min;
+                contained = true;
+            }
         }
 
         let periodic_value =
@@ -978,7 +1015,66 @@ impl ExtentNd {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kernel::Kernel;
     use crate::math::BOUNDED_INFINITE_PARAM;
+
+    #[test]
+    fn periodic_mapping_keeps_legacy_defaults_and_opt_in_offsets() {
+        let mut k = Kernel::default();
+        let e = Extent1d::from_min_max(-30.0, -29.99993);
+        let v = 330.000035;
+        let legacy = e.contains_periodic_value(v, 360.0, -1.0);
+        assert!(legacy.contained);
+        assert_eq!(legacy.periodic_value, -30.0);
+        assert_eq!(
+            e.contains_periodic_value_with_kernel(&k, v, 360.0, -1.0),
+            legacy
+        );
+
+        k.fixes.periodic_containment_preserve_offset = true;
+        let fixed = e.contains_periodic_value_with_kernel(&k, v, 360.0, -1.0);
+        assert!(fixed.contained);
+        assert_eq!(fixed.periodic_value, v - 360.0);
+        assert!((fixed.dist_to_min - 0.000035).abs() < 1e-12);
+        assert!((fixed.dist_to_max - 0.000035).abs() < 1e-12);
+        // Opting in does not change callers of the legacy API.
+        assert_eq!(e.contains_periodic_value(v, 360.0, -1.0), legacy);
+    }
+
+    #[test]
+    fn periodic_mapping_respects_tolerance_and_other_branches() {
+        let mut k = Kernel::default();
+        k.fixes.periodic_containment_preserve_offset = true;
+        let e = Extent1d::from_min_max(-30.0, -29.99993);
+        // Both ends, interior, tolerance halo and multiple turns retain their offsets.
+        for angle in [-30.00005, -30.0, -29.999965, -29.99993, -29.99988] {
+            for turns in [1.0, 2.0, -1.0] {
+                let v = angle + turns * 360.0;
+                let c = e.contains_periodic_value_with_kernel(&k, v, 360.0, -1.0);
+                assert!(c.contained, "{angle} + {turns} turns");
+                assert!((c.periodic_value - angle).abs() < 1e-12);
+            }
+        }
+        assert!(
+            !e.contains_periodic_value_with_kernel(&k, 330.0003, 360.0, -1.0)
+                .contained
+        );
+        assert!(
+            e.contains_periodic_value_with_kernel(&k, 330.000035, 360.0, 1e-6)
+                .contained
+        );
+        assert!(
+            !e.contains_periodic_value_with_kernel(&k, 329.99995, 360.0, 1e-6)
+                .contained
+        );
+        // Zero period and already-in-domain values use the original early return.
+        for (v, period) in [(-29.999965, 360.0), (330.000035, 0.0), (-31.0, 0.0)] {
+            assert_eq!(
+                e.contains_periodic_value_with_kernel(&k, v, period, -1.0),
+                e.contains_periodic_value(v, period, -1.0)
+            );
+        }
+    }
 
     #[test]
     fn construct_and_access() {
